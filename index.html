@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#140d25" />
+  <title>Scrubbr — Manifest Player</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui,-apple-system,Segoe UI,sans-serif; background:#110c1c; color:#eee8ff }
+    *{box-sizing:border-box} body{margin:0} main{max-width:760px;margin:0 auto;padding:24px 16px 64px}
+    h1{margin:0;font-size:26px} h2{font-size:19px} p{line-height:1.55;color:#cfc5e6}
+    header{display:flex;align-items:center;gap:12px;margin-bottom:24px}.logo{display:grid;place-items:center;background:#8b5cf6;color:white;border-radius:10px;font-size:24px;font-weight:900;width:43px;height:43px}
+    .pill{font-size:12px;color:#b9a4ef}.panel{border:1px solid #413655;background:#1c142b;border-radius:16px;padding:16px;margin:16px 0}
+    .video{aspect-ratio:16/9;background:#08060c;border-radius:12px;overflow:hidden}.video iframe{width:100%;height:100%;border:0}
+    button{background:#8b5cf6;color:white;border:0;padding:12px 16px;border-radius:10px;font-size:15px;cursor:pointer}
+    button:disabled{opacity:.4;cursor:not-allowed}.secondary{background:#382950}
+    .controls{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.queue{list-style:none;margin:0;padding:0}
+    .queue li{border-top:1px solid #413655}.queue button{background:transparent;color:#eae4f7;text-align:left;width:100%;padding:14px 8px}
+    .queue button[aria-current="true"]{background:#322448;border-left:3px solid #b69aff}
+    .queue small{display:block;color:#b8a9cf;margin-top:4px}.error{color:#ffb7be}.muted{color:#b8a9cf;font-size:13px}
+    input,textarea{width:100%;padding:11px;background:#100b1c;border:1px solid #574771;border-radius:8px;color:white} textarea{min-height:190px;font:13px/1.5 ui-monospace,SFMono-Regular,monospace;resize:vertical}
+    label{display:block;margin-bottom:6px;font-size:14px}
+  </style>
+</head>
+<body>
+<main>
+  <header><span class="logo">s</span><div><h1>scrubbr</h1><span class="pill">OPEN MANIFEST PLAYER · STATIC POC</span></div></header>
+  <h2 id="title">Loading playlist…</h2><p id="description"></p>
+  <section class="panel">
+    <div id="player" class="video" aria-label="YouTube embedded player"></div>
+    <div class="controls"><button id="previous" class="secondary" disabled>Previous</button><button id="next" disabled>Next video</button></div>
+    <p id="now" class="muted" aria-live="polite"></p><p id="status" class="error" role="status"></p>
+  </section>
+  <section class="panel"><h2>Up next</h2><ol id="queue" class="queue"></ol></section>
+  <section class="panel">
+    <h2>Paste a playlist manifest</h2>
+    <label for="manifest-json">JSON manifest</label>
+    <textarea id="manifest-json" spellcheck="false" placeholder='{"version":1,"title":"My playlist","items":[{"videoId":"M7lc1UVf-VE","title":"Example"}]}'></textarea>
+    <div class="controls"><button id="load-json">Play pasted manifest</button><button id="example" class="secondary">Use example JSON</button></div>
+    <p class="muted">Pasted JSON stays in this browser session. It is not uploaded or registered with Rizzr. Use a hosted manifest URL below to share a playlist.</p>
+  </section>
+  <section class="panel">
+    <label for="manifest-url">Load a JSON manifest (same-origin path or CORS-enabled HTTPS URL)</label>
+    <input id="manifest-url" placeholder="./demo.json" inputmode="url" />
+    <div class="controls"><button id="load" class="secondary">Load manifest</button></div>
+    <p class="muted">For a shareable URL use ?manifest=./demo.json . Playback uses the official visible YouTube player. Some videos cannot be embedded. On mobile, tap Play inside the player when autoplay is blocked.</p>
+  </section>
+</main>
+<script>
+'use strict';
+let player, entries = [], current = 0, ready = false;
+const el = id => document.getElementById(id);
+const setStatus = msg => { el('status').textContent = msg || ''; };
+const apiReady = new Promise(resolve => { window.onYouTubeIframeAPIReady = resolve; });
+const script = document.createElement('script');
+script.src = 'https://www.youtube.com/iframe_api';
+document.head.appendChild(script);
+function validatedUrl(input) {
+  const url = new URL(input, location.href);
+  if (url.protocol !== 'https:' && url.origin !== location.origin) throw Error('Manifest URL must use HTTPS.');
+  return url;
+}
+function validate(data) {
+  if (!data || !Array.isArray(data.items) || !data.items.length || data.items.length > 200)
+    throw Error('Manifest must have 1–200 items.');
+  const items = data.items.map((item, i) => {
+    if (!item || typeof item.videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(item.videoId))
+      throw Error('Invalid videoId at position ' + (i + 1));
+    return { videoId:item.videoId, title:String(item.title || 'Video ' + (i+1)).slice(0,200),
+      note:String(item.note || '').slice(0,500) };
+  });
+  return { title:String(data.title || 'Untitled playlist').slice(0,200),
+    description:String(data.description || '').slice(0,1000), items };
+}
+function render() {
+  const item = entries[current];
+  el('now').textContent = item ? (current+1) + ' / ' + entries.length + ' · ' + item.title + (item.note ? ' — ' + item.note : '') : '';
+  el('previous').disabled = current <= 0;
+  el('next').disabled = current >= entries.length - 1;
+  const queue = el('queue'); queue.replaceChildren();
+  entries.forEach((item, index) => {
+    const li = document.createElement('li'), button = document.createElement('button');
+    button.type='button'; button.setAttribute('aria-current',String(index === current));
+    const name = document.createElement('span'); name.textContent = (index+1) + '. ' + item.title;
+    const note = document.createElement('small'); note.textContent = item.note;
+    button.append(name,note); button.addEventListener('click',()=>playIndex(index));
+    li.append(button); queue.append(li);
+  });
+}
+function playIndex(index) {
+  if (index < 0 || index >= entries.length) return;
+  current=index; render(); setStatus('');
+  if (ready) player.loadVideoById(entries[current].videoId);
+}
+async function showManifest(data, url) {
+  data=validate(data);
+  entries=data.items; current=0;
+  el('title').textContent=data.title; el('description').textContent=data.description;
+  render();
+  if (url) { el('manifest-url').value=url.toString(); history.replaceState(null,'', '?manifest='+encodeURIComponent(url.toString())); }
+  else { history.replaceState(null,'', location.pathname); }
+  await apiReady;
+  if (!player) {
+    player=new YT.Player('player',{height:'390',width:'640',videoId:entries[0].videoId,
+      playerVars:{playsinline:1,origin:location.origin},
+      events:{onReady:()=>{ready=true;render();},
+        onStateChange:e=>{if(e.data===YT.PlayerState.ENDED && current<entries.length-1) playIndex(current+1);},
+        onError:e=>setStatus('YouTube cannot play this video here (error '+e.data+'). Choose Next video.')}});
+  } else if(ready) player.cueVideoById(entries[0].videoId);
+}
+async function loadManifest(input) {
+  setStatus(''); const url=validatedUrl(input);
+  const response=await fetch(url.toString(),{cache:'no-cache'});
+  if(!response.ok) throw Error('Manifest request failed: HTTP '+response.status);
+  await showManifest(await response.json(), url);
+}
+el('previous').addEventListener('click',()=>playIndex(current-1));
+el('next').addEventListener('click',()=>playIndex(current+1));
+el('load-json').addEventListener('click',()=>{setStatus(''); try { const data=JSON.parse(el('manifest-json').value); showManifest(data).catch(e=>setStatus(e.message)); } catch(e){setStatus('Invalid JSON: '+e.message);} });
+el('example').addEventListener('click',()=>{el('manifest-json').value=JSON.stringify({version:1,title:'Scrubbr playback smoke test',description:'A small sequence for testing manual queue navigation.',items:[{videoId:'M7lc1UVf-VE',title:'YouTube IFrame API demonstration',note:'Official player test video'},{videoId:'jNQXAC9IVRw',title:'Me at the zoo',note:'Second entry for queue switching'}]},null,2);});
+el('load').addEventListener('click',()=>loadManifest(el('manifest-url').value.trim()).catch(e=>setStatus(e.message)));
+const selected=new URLSearchParams(location.search).get('manifest') || './demo.json';
+loadManifest(selected).catch(e=>{ el('title').textContent='Unable to load playlist';setStatus(e.message); });
+</script>
+</body>
+</html>
