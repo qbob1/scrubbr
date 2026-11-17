@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "title": "Scrubbr playback smoke test",
+  "description": "Two videos for testing queue navigation and automatic advancement in the official YouTube player.",
+  "items": [
+    {
+      "videoId": "M7lc1UVf-VE",
+      "title": "YouTube IFrame API demonstration",
+      "note": "Official player test video"
+    },
+    {
+      "videoId": "jNQXAC9IVRw",
+      "title": "Me at the zoo",
+      "note": "Second entry for queue switching; embedding availability may vary"
+    }
+  ]
+}
